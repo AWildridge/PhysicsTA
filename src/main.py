@@ -73,15 +73,16 @@ def prepare_dataloaders(df):
     # Divide by class
     df_class_0 = df[df['Awarded.1'] == 0.0]
     df_class_1 = df[df['Awarded.1'] == 1.0]
-    df_sample_class_0 = df_class_0[:-int(len(df_class_0) / 2)]
+    class_0_idx = random.sample(range(len(df_class_0)), len(df_class_0))
+    df_sample_class_0 = df_class_0.iloc[class_0_idx[:-int(len(df_class_0) / 2)]]
 
     df_class_0_over = df_sample_class_0.sample(int(count_class_1), replace=True)
-    df_class_0 = df_class_0[-int(len(df_class_0) / 2):]
+    df_class_0 = df_class_0.iloc[class_0_idx[-int(len(df_class_0) / 2):]]
 
     class_1_idx = random.sample(range(len(df_class_1)), len(df_class_1))
     class_0_over_idx = random.sample(range(len(df_class_0_over)), len(df_class_0_over))
 
-    pos_split_frac = 0.2  # 80% train/20@ val+test split for positive class
+    pos_split_frac = 0.3  # 80% train/20@ val+test split for positive class
     pos_split_id = int(pos_split_frac * len(class_1_idx))
     if len(class_1_idx[-pos_split_id:]) % 2 == 1:
         pos_split_id += 1
@@ -123,46 +124,6 @@ def prepare_dataloaders(df):
     test_loader = DataLoader(test_data, shuffle=True, batch_size=batch_size)
 
     return batch_size, train_loader, val_loader, test_loader
-
-
-def train_model(model, epochs, batch_size, train_loader, val_loader, learning_rate, output_size=1, criterion=nn.BCELoss(), name='state_dict'):
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    counter = 0
-    print_every = 1
-    clip = 5
-    valid_loss_min = np.Inf
-
-    model.train()
-    for epoch in range(epochs):  # again, normally you would NOT do 300 epochs, it is toy data
-        h = model.init_hidden(batch_size)
-        for inputs, labels in train_loader:
-            if len(inputs) != batch_size:
-                continue
-            counter += 1
-            h = tuple([e.data for e in h])
-            inputs, labels = inputs.to(device), labels.to(device)
-            model.zero_grad()
-            output, h = model(inputs, h)
-            loss = criterion(output.squeeze(), labels.float())
-            loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), clip)
-            optimizer.step()
-
-            if counter % print_every == 0:
-                val_h = model.init_hidden(batch_size)
-                val_losses = []
-                model.eval()
-                for inp, lab in val_loader:
-                    val_h = tuple([each.data for each in val_h])
-                    inp, lab = inp.to(device), lab.to(device)
-                    out, val_h = model(inp, val_h)
-                    val_loss = criterion(out.squeeze(), lab.float())
-                    val_losses.append(val_loss.item())
-
-                model.train()
-                if np.mean(val_losses) <= valid_loss_min:
-                    torch.save(model.state_dict(), './' + name + '.pt')
-                    valid_loss_min = np.mean(val_losses)
 
 
 def find_failure_mode(df, name, vocab, epochs=30, output_size=1, criterion=None, lr=0.0005):
@@ -239,7 +200,7 @@ def find_failure_mode(df, name, vocab, epochs=30, output_size=1, criterion=None,
 
     incorrect_indices = np.where(correct_tensor.cpu().detach().numpy() == 0)
     incorrects = inputs[incorrect_indices].cpu().detach().numpy()
-    vectorized_data = np.vstack(df_q5_p1_filter['VectorizedFilteredSubmission'].values)
+    vectorized_data = np.vstack(df['VectorizedFilteredSubmission'].values)
     incorrect_lookup_table = np.array(
         [[np.array_equal(incorrects[i], vectorized_data[j]) for i in range(len(incorrects))] for j in
          range(len(vectorized_data))])
@@ -369,6 +330,8 @@ print('=====================================')
 print('~~~~~Processing Quiz 3 Problem F~~~~~')
 print('=====================================')
 
+# TODO: Add multi-class classification correctly
+'''
 filtered_df_q3_pF = df_q3_pF[['Submission.8', 'Attempt.9', 'Awarded.9', 'Attempt.10', 'Awarded.10']]
 filtered_df_q3_pF['Submission'] = filtered_df_q3_pF['Submission.8']
 
@@ -398,5 +361,30 @@ print('Saving failures from Quiz 3 Problem F')
 w = csv.writer(open("q3_pF_failures.csv", "w"))
 for key, val in q3_pF_failures.items():
     w.writerow([key, val])
+    '''
 
+print('=====================================')
+print('~~~~~Processing Quiz 1 Problem 6~~~~~')
+print('=====================================')
 
+filtered_df_q1_p6 = df_q1_p6[['Submission.11', 'Attempt.11', 'Attempt.12', 'Awarded.12']]
+filtered_df_q1_p6 = filtered_df_q1_p6.rename(columns={'Submission.11': 'Submission', 'Attempt.11': 'Attempt',
+                                                      'Attempt.12': 'Attempt.1', 'Awarded.12': 'Awarded.1'})
+filtered_df_q1_p6 = filtered_df_q1_p6[pd.notnull(filtered_df_q1_p6['Submission'])]
+filtered_df_q1_p6 = filtered_df_q1_p6[filtered_df_q1_p6['Attempt.1'] == 1.0]
+filtered_df_q1_p6 = filtered_df_q1_p6[['Submission', 'Attempt', 'Attempt.1', 'Awarded.1']]
+
+filtered_df_q1_p6, q1_p6_vocab = process_df(filtered_df_q1_p6, 'q1_p6')
+q1_p6_failures = {}
+for i in range(1000):
+    print(i)
+    failure_cases = find_failure_mode(filtered_df_q1_p6, 'q1_p6_classifier' + str(i), q1_p6_vocab, epochs=30, lr=0.001)
+    for failure_idx in failure_cases:
+        if failure_idx in q1_p6_failures.keys():
+            q1_p6_failures[failure_idx] += 1
+        else:
+            q1_p6_failures[failure_idx] = 1
+
+w = csv.writer(open("q1_p6_failures.csv", "w"))
+for key, val in q1_p6_failures.items():
+    w.writerow([key, val])
